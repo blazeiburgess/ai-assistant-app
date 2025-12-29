@@ -1,19 +1,25 @@
 import { Session } from 'next-auth';
 
-import { TranscriptMetadata } from '@/lib/utils/app/metadata';
+import {
+  PendingTranscriptionInfo,
+  TranscriptMetadata,
+} from '@/lib/utils/app/metadata';
+import { createAnthropicStreamProcessor } from '@/lib/utils/app/stream/anthropicStreamProcessor';
 import { createAzureOpenAIStreamProcessor } from '@/lib/utils/app/stream/streamProcessor';
-import { getMessagesToSend } from '@/lib/utils/server/chat';
-import { sanitizeForLog } from '@/lib/utils/server/logSanitization';
-import { getGlobalTiktoken } from '@/lib/utils/server/tiktokenCache';
+import { getMessagesToSend } from '@/lib/utils/server/chat/chat';
+import { sanitizeForLog } from '@/lib/utils/server/log/logSanitization';
+import { getGlobalTiktoken } from '@/lib/utils/server/tiktoken/tiktokenCache';
 
 import { Message } from '@/types/chat';
-import { OpenAIModel, OpenAIModelID } from '@/types/openai';
+import { OpenAIModel } from '@/types/openai';
 import { Citation } from '@/types/rag';
 import { Tone } from '@/types/tone';
 
 import { ModelSelector, StreamingService, ToneService } from '../shared';
+import { AnthropicFoundryHandler } from './handlers/AnthropicFoundryHandler';
 import { HandlerFactory } from './handlers/HandlerFactory';
 
+import { AnthropicFoundry } from '@anthropic-ai/foundry-sdk';
 import OpenAI, { AzureOpenAI } from 'openai';
 
 /**
@@ -32,6 +38,7 @@ export interface StandardChatRequest {
   transcript?: TranscriptMetadata;
   citations?: Citation[]; // Web search citations to include in response
   tone?: Tone; // Full tone object from client
+  pendingTranscriptions?: PendingTranscriptionInfo[]; // Async batch transcription jobs
 }
 
 /**
@@ -50,6 +57,7 @@ export interface StandardChatRequest {
 export class StandardChatService {
   private azureOpenAIClient: AzureOpenAI;
   private openAIClient: OpenAI;
+  private anthropicFoundryClient: AnthropicFoundry | undefined;
   private modelSelector: ModelSelector;
   private toneService: ToneService;
   private streamingService: StreamingService;
@@ -57,12 +65,14 @@ export class StandardChatService {
   constructor(
     azureOpenAIClient: AzureOpenAI,
     openAIClient: OpenAI,
+    anthropicFoundryClient: AnthropicFoundry | undefined,
     modelSelector: ModelSelector,
     toneService: ToneService,
     streamingService: StreamingService,
   ) {
     this.azureOpenAIClient = azureOpenAIClient;
     this.openAIClient = openAIClient;
+    this.anthropicFoundryClient = anthropicFoundryClient;
     this.modelSelector = modelSelector;
     this.toneService = toneService;
     this.streamingService = streamingService;
@@ -119,7 +129,21 @@ export class StandardChatService {
     );
     // Don't free() - encoding is shared across requests
 
-    // Get appropriate handler for this model
+    // Check if this is an Anthropic model (different API)
+    if (HandlerFactory.isAnthropicModel(modelConfig)) {
+      return this.handleAnthropicChat(
+        messagesToSend,
+        modelConfig,
+        enhancedPrompt,
+        temperature,
+        stream,
+        request.user,
+        request.transcript,
+        request.citations,
+      );
+    }
+
+    // Get appropriate handler for this model (OpenAI-compatible)
     const handler = HandlerFactory.getHandler(
       modelConfig,
       this.azureOpenAIClient,
@@ -160,6 +184,7 @@ export class StandardChatService {
         undefined, // stopConversationRef
         request.transcript, // transcript metadata
         request.citations, // web search citations
+        request.pendingTranscriptions, // async batch transcription jobs
       );
 
       return new Response(processedStream, {
@@ -176,6 +201,103 @@ export class StandardChatService {
         JSON.stringify({ text: completion.choices[0]?.message?.content }),
         { headers: { 'Content-Type': 'application/json' } },
       );
+    }
+  }
+
+  /**
+   * Handles chat requests for Anthropic Claude models.
+   * Uses the Anthropic Messages API which has a different structure than OpenAI.
+   */
+  private async handleAnthropicChat(
+    messages: Message[],
+    modelConfig: OpenAIModel,
+    systemPrompt: string,
+    temperature: number,
+    stream: boolean,
+    user: Session['user'],
+    transcript?: TranscriptMetadata,
+    citations?: Citation[],
+  ): Promise<Response> {
+    // Validate Anthropic client is configured
+    if (!this.anthropicFoundryClient) {
+      console.error(
+        '[StandardChatService] Anthropic client not configured. Set AZURE_AI_FOUNDRY_ANTHROPIC_ENDPOINT.',
+      );
+      return new Response(
+        JSON.stringify({
+          error: 'Claude models not configured. Contact administrator.',
+        }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+
+    const handler = new AnthropicFoundryHandler(this.anthropicFoundryClient);
+
+    console.log(
+      `[StandardChatService] Using AnthropicFoundryHandler for model: ${sanitizeForLog(modelConfig.id)}`,
+    );
+
+    // Prepare messages for Anthropic format
+    const preparedMessages = handler.prepareMessages(messages, modelConfig);
+
+    if (stream) {
+      // Build streaming request parameters
+      const requestParams = handler.buildStreamingRequestParams(
+        modelConfig.id,
+        preparedMessages,
+        systemPrompt,
+        temperature,
+        user,
+        modelConfig,
+      );
+
+      // Execute streaming request
+      const response = await handler.executeStreamingRequest(requestParams);
+
+      // Process the stream with Anthropic-specific processor
+      const processedStream = createAnthropicStreamProcessor(
+        response,
+        undefined, // stopConversationRef
+        transcript,
+        citations,
+      );
+
+      return new Response(processedStream, {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        },
+      });
+    } else {
+      // Build non-streaming request parameters
+      const requestParams = handler.buildNonStreamingRequestParams(
+        modelConfig.id,
+        preparedMessages,
+        systemPrompt,
+        temperature,
+        user,
+        modelConfig,
+      );
+
+      // Execute non-streaming request
+      const message = await handler.executeRequest(requestParams);
+
+      // Extract text content from response
+      const textContent = handler.extractTextContent(message);
+      const thinkingContent = handler.extractThinkingContent(message);
+
+      // Build response with optional thinking metadata
+      const responseData: { text: string; thinking?: string } = {
+        text: textContent,
+      };
+      if (thinkingContent) {
+        responseData.thinking = thinkingContent;
+      }
+
+      return new Response(JSON.stringify(responseData), {
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
   }
 }

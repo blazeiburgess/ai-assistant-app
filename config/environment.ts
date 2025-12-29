@@ -31,6 +31,10 @@ const serverEnvSchema = z.object({
   OPENAI_API_VERSION: z.string().default('2025-04-01-preview'),
   OPENAI_EMBEDDING_DEPLOYMENT: z.string().default('text-embedding'),
 
+  // Azure Speech Services (for batch transcription)
+  AZURE_SPEECH_KEY: z.string().optional(),
+  AZURE_SPEECH_REGION: z.string().default('eastus'),
+
   // Azure AI Foundry
   AZURE_AI_FOUNDRY_ENDPOINT: z.string().url().optional(),
   AZURE_AI_FOUNDRY_OPENAI_ENDPOINT: z.string().url().optional(),
@@ -56,7 +60,7 @@ const serverEnvSchema = z.object({
     .transform((val) => val === 'true'),
 
   // Application Configuration
-  DEFAULT_MODEL: z.string().default('gpt-4.1'),
+  DEFAULT_MODEL: z.string().default('gpt-5.2-chat'),
   DEFAULT_USE_KNOWLEDGE_BASE: z
     .string()
     .default('false')
@@ -81,7 +85,8 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_EMAIL: z.string().email().optional(),
 
   // System Prompt Configuration
-  NEXT_PUBLIC_DEFAULT_SYSTEM_PROMPT: z.string().optional(),
+  BASE_SYSTEM_PROMPT: z.string().optional(), // Overrides the default base system prompt
+  NEXT_PUBLIC_DEFAULT_SYSTEM_PROMPT: z.string().optional(), // Legacy: user's default prompt
   NEXT_PUBLIC_DEFAULT_TEMPERATURE: z.string().default('0.5'),
 
   // Application Environment

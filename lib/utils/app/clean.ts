@@ -1,3 +1,8 @@
+import {
+  migrateLegacyMessages,
+  needsMigration,
+} from '@/lib/utils/shared/chat/messageVersioning';
+
 import { Conversation } from '@/types/chat';
 import { OpenAIModel, OpenAIModelID, OpenAIModels } from '@/types/openai';
 
@@ -22,7 +27,7 @@ export const cleanConversationHistory = (history: any[]): Conversation[] => {
         (conversation.model as OpenAIModel)?.isDisabled
       ) {
         // TODO: Replace with environmentally set default model so fixing doesn't require code change
-        conversation.model = OpenAIModels[OpenAIModelID.GPT_5];
+        conversation.model = OpenAIModels[OpenAIModelID.GPT_5_2_CHAT];
       }
 
       if (!conversation.prompt) {
@@ -39,6 +44,9 @@ export const cleanConversationHistory = (history: any[]): Conversation[] => {
 
       if (!conversation.messages) {
         conversation.messages = [];
+      } else if (needsMigration(conversation.messages)) {
+        // Migrate legacy assistant messages to AssistantMessageGroup format
+        conversation.messages = migrateLegacyMessages(conversation.messages);
       }
 
       acc.push(conversation);

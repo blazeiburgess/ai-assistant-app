@@ -1,33 +1,27 @@
-import { IconCpu, IconTemperature, IconTool, IconX } from '@tabler/icons-react';
+import { IconX } from '@tabler/icons-react';
 import React, { FC, useEffect, useMemo, useState } from 'react';
-import { RiRobot2Line } from 'react-icons/ri';
 
 import { useTranslations } from 'next-intl';
 
 import { useConversations } from '@/client/hooks/conversation/useConversations';
 import { useAgentManagement } from '@/client/hooks/settings/useAgentManagement';
+import { useModelOrder } from '@/client/hooks/settings/useModelOrder';
 import { useModelSelectState } from '@/client/hooks/settings/useModelSelectState';
-import { useModelSelection } from '@/client/hooks/settings/useModelSelection';
 import { useSettings } from '@/client/hooks/settings/useSettings';
 
 import { Conversation } from '@/types/chat';
 import { OpenAIModel, OpenAIModelID, OpenAIModels } from '@/types/openai';
 import { SearchMode } from '@/types/searchMode';
 
-import {
-  AzureAIIcon,
-  AzureOpenAIIcon,
-  DeepSeekIcon,
-  MetaIcon,
-  OpenAIIcon,
-  XAIIcon,
-} from '../Icons/providers';
+import { AzureAIIcon, AzureOpenAIIcon } from '../Icons/providers';
 import { TabNavigation } from '../UI/TabNavigation';
 import { CustomAgentForm } from './CustomAgents/CustomAgentForm';
 import { ModelCard } from './ModelCard';
 import { AgentsTab } from './ModelSelect/AgentsTab';
 import { ModelDetailsPanel } from './ModelSelect/ModelDetailsPanel';
+import { ModelOrderControls } from './ModelSelect/ModelOrderControls';
 import { ModelProviderIcon } from './ModelSelect/ModelProviderIcon';
+import { ModelTypeIcon } from './ModelSelect/ModelTypeIcon';
 
 import { CustomAgent } from '@/client/stores/settingsStore';
 
@@ -71,33 +65,43 @@ export const ModelSelect: FC<ModelSelectProps> = ({ onClose }) => {
   } = useAgentManagement();
 
   // Filter out disabled models and custom agents (custom agents should only appear in Agents tab)
-  const baseModels = models
-    .filter(
-      (m) =>
-        !OpenAIModels[m.id as OpenAIModelID]?.isDisabled &&
-        !m.id.startsWith('custom-') &&
-        !m.isCustomAgent,
-    )
-    .sort((a, b) => {
-      const aProvider = OpenAIModels[a.id as OpenAIModelID]?.provider || '';
-      const bProvider = OpenAIModels[b.id as OpenAIModelID]?.provider || '';
+  const baseModels = useMemo(
+    () =>
+      models.filter(
+        (m) =>
+          !OpenAIModels[m.id as OpenAIModelID]?.isDisabled &&
+          !m.id.startsWith('custom-') &&
+          !m.isCustomAgent,
+      ),
+    [models],
+  );
 
-      // Provider order: openai, meta, deepseek, xai
-      const providerOrder = { openai: 0, meta: 1, deepseek: 2, xai: 3 };
-      const providerDiff =
-        (providerOrder[aProvider as keyof typeof providerOrder] ?? 4) -
-        (providerOrder[bProvider as keyof typeof providerOrder] ?? 4);
+  // Use the model ordering hook for sorting and reordering
+  const {
+    orderedModels,
+    orderMode,
+    setOrderMode,
+    moveModel,
+    incrementUsage,
+    resetOrder,
+    canMoveUp,
+    canMoveDown,
+  } = useModelOrder(baseModels);
 
-      if (providerDiff !== 0) return providerDiff;
+  // Edit mode for manual model reordering
+  const [isEditingOrder, setIsEditingOrder] = useState(false);
 
-      // Within OpenAI, ensure GPT-4.1 is first
-      if (aProvider === 'openai') {
-        if (a.id === OpenAIModelID.GPT_4_1) return -1;
-        if (b.id === OpenAIModelID.GPT_4_1) return 1;
-      }
-
-      return a.name.localeCompare(b.name);
-    });
+  /**
+   * Toggle edit mode for model ordering.
+   * When entering edit mode, switch to 'custom' order mode if not already.
+   */
+  const handleToggleEditOrder = () => {
+    if (!isEditingOrder && orderMode !== 'custom') {
+      // Entering edit mode: switch to custom order
+      setOrderMode('custom');
+    }
+    setIsEditingOrder(!isEditingOrder);
+  };
 
   // Convert custom agents to OpenAIModel format
   const customAgentModels: OpenAIModel[] = useMemo(() => {
@@ -125,7 +129,7 @@ export const ModelSelect: FC<ModelSelectProps> = ({ onClose }) => {
     ? OpenAIModels[selectedModel.id as OpenAIModelID]
     : null;
   const isCustomAgent = selectedModel?.isCustomAgent === true;
-  const isGpt5 = selectedModel?.id === OpenAIModelID.GPT_5;
+  const isGpt5 = selectedModel?.id === OpenAIModelID.GPT_5_2;
   const agentAvailable = modelConfig?.agentId !== undefined;
 
   // Get current search mode from conversation (default to INTELLIGENT for privacy)
@@ -193,6 +197,9 @@ export const ModelSelect: FC<ModelSelectProps> = ({ onClose }) => {
       );
       return;
     }
+
+    // Track usage for model ordering
+    incrementUsage(model.id);
 
     // Switch to details view on mobile when a model is selected
     setMobileView('details');
@@ -318,13 +325,13 @@ export const ModelSelect: FC<ModelSelectProps> = ({ onClose }) => {
         tabs={[
           {
             id: 'models',
-            label: 'Models',
+            label: t('modelSelect.tabs.models'),
             icon: <AzureOpenAIIcon className="w-5 h-5" />,
             width: '110px',
           },
           {
             id: 'agents',
-            label: 'Agents',
+            label: t('modelSelect.tabs.agents'),
             icon: <AzureAIIcon className="w-5 h-5" />,
             width: '115px',
           },
@@ -346,16 +353,25 @@ export const ModelSelect: FC<ModelSelectProps> = ({ onClose }) => {
             <div
               className={`${
                 mobileView === 'details' ? 'hidden md:block' : 'block'
-              } w-full md:w-80 flex-shrink-0 overflow-y-auto md:border-r border-gray-200 dark:border-gray-700 md:pr-4`}
+              } w-full md:w-80 flex-shrink-0 overflow-y-auto md:border-e border-gray-200 dark:border-gray-700 md:pe-4`}
             >
               <div className="space-y-4">
+                {/* Model Order Controls */}
+                <ModelOrderControls
+                  orderMode={orderMode}
+                  onOrderModeChange={setOrderMode}
+                  onReset={resetOrder}
+                  isEditing={isEditingOrder}
+                  onToggleEdit={handleToggleEditOrder}
+                />
+
                 {/* Base Models */}
                 <div>
                   <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">
-                    Base Models
+                    {t('modelSelect.sections.baseModels')}
                   </h4>
                   <div className="space-y-2">
-                    {baseModels.map((model) => {
+                    {orderedModels.map((model) => {
                       const config = OpenAIModels[model.id as OpenAIModelID];
                       const isSelected = selectedModelId === model.id;
 
@@ -369,6 +385,14 @@ export const ModelSelect: FC<ModelSelectProps> = ({ onClose }) => {
                           icon={
                             <ModelProviderIcon provider={config?.provider} />
                           }
+                          typeIcon={
+                            <ModelTypeIcon modelType={config?.modelType} />
+                          }
+                          showReorderControls={isEditingOrder}
+                          canMoveUp={canMoveUp(model.id)}
+                          canMoveDown={canMoveDown(model.id)}
+                          onMoveUp={() => moveModel(model.id, 'up')}
+                          onMoveDown={() => moveModel(model.id, 'down')}
                         />
                       );
                     })}

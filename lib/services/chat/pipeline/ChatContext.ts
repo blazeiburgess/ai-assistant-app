@@ -25,6 +25,15 @@ export interface ProcessedContent {
     transcript: string;
   }[];
 
+  /** Pending transcription jobs (for files >25MB that use async processing) */
+  pendingTranscriptions?: {
+    filename: string;
+    jobId: string;
+    blobPath?: string; // Only for batch jobs
+    totalChunks?: number; // Only for chunked jobs
+    jobType?: 'chunked' | 'batch';
+  }[];
+
   /** Validated image URLs (if images present) */
   images?: {
     url: string;

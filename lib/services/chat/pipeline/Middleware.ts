@@ -4,11 +4,11 @@ import { NextRequest } from 'next/server';
 import { InputValidator } from '@/lib/services/chat/validators/InputValidator';
 import { ModelSelector, RateLimiter } from '@/lib/services/shared';
 
-import { DEFAULT_SYSTEM_PROMPT } from '@/lib/utils/app/const';
-import { getMessageContentTypes } from '@/lib/utils/server/chat';
+import { buildSystemPrompt } from '@/lib/utils/app/systemPrompt';
+import { getMessageContentTypes } from '@/lib/utils/server/chat/chat';
 
-import { ErrorCode, PipelineError } from '@/lib/types/errors';
 import { ChatBody } from '@/types/chat';
+import { ErrorCode, PipelineError } from '@/types/errors';
 import { SearchMode } from '@/types/searchMode';
 
 import { ChatContext } from './ChatContext';
@@ -148,7 +148,7 @@ export const requestParsingMiddleware: Middleware = async (req) => {
     return {
       model,
       messages,
-      systemPrompt: prompt || DEFAULT_SYSTEM_PROMPT,
+      systemPrompt: buildSystemPrompt(prompt),
       temperature,
       stream,
       reasoningEffort,
@@ -205,7 +205,7 @@ export const createContentAnalysisMiddleware = (
 
   return {
     contentTypes,
-    hasFiles: contentTypes.has('file'),
+    hasFiles: contentTypes.has('file') || contentTypes.has('audio'),
     hasImages: contentTypes.has('image'),
     hasAudio: contentTypes.has('audio'), // Audio files detected separately by analyzer
   };

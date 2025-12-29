@@ -40,6 +40,10 @@ export interface FileMessageContent {
   type: 'file_url';
   url: string;
   originalFilename?: string;
+  /** ISO-639-1 language code for transcription (e.g., 'en', 'es'). Undefined = auto-detect */
+  transcriptionLanguage?: string;
+  /** Optional context/instructions to improve transcription accuracy */
+  transcriptionPrompt?: string;
 }
 
 export interface TextMessageContent {
@@ -74,9 +78,82 @@ export interface Message {
     language: string;
     code: string;
   };
+  /** Pending batch transcription job ID (for async transcription >25MB files) */
+  pendingTranscriptionJobId?: string;
+  /** Filename being transcribed (for UI display during pending state) */
+  pendingTranscriptionFilename?: string;
+  /** Blob path for cleanup after transcription completes */
+  pendingTranscriptionBlobPath?: string;
 }
 
 export type Role = 'system' | 'assistant' | 'user';
+
+export type ChatInputSubmitTypes = 'TEXT' | 'IMAGE' | 'FILE' | 'MULTI_FILE';
+
+/**
+ * Represents a single assistant message version.
+ * Used when the user regenerates responses - each regeneration creates a new version.
+ */
+export interface AssistantMessageVersion {
+  content:
+    | string
+    | Array<TextMessageContent | FileMessageContent>
+    | Array<TextMessageContent | ImageMessageContent>
+    | Array<TextMessageContent | FileMessageContent | ImageMessageContent>
+    | TextMessageContent;
+  messageType: MessageType | ChatInputSubmitTypes | undefined;
+  citations?: Citation[];
+  thinking?: string;
+  transcript?: TranscriptMetadata;
+  error?: boolean;
+  createdAt: string; // ISO timestamp for when this version was generated
+}
+
+/**
+ * Groups multiple assistant response versions for a single user message.
+ * The activeIndex determines which version is currently displayed.
+ */
+export interface AssistantMessageGroup {
+  type: 'assistant_group';
+  activeIndex: number;
+  versions: AssistantMessageVersion[];
+}
+
+/**
+ * Union type for conversation message entries.
+ * Supports both legacy flat Message objects and new grouped assistant responses.
+ */
+export type ConversationEntry = Message | AssistantMessageGroup;
+
+/**
+ * Type guard to check if an entry is an AssistantMessageGroup.
+ */
+export function isAssistantMessageGroup(
+  entry: ConversationEntry,
+): entry is AssistantMessageGroup {
+  return (
+    typeof entry === 'object' &&
+    entry !== null &&
+    'type' in entry &&
+    (entry as AssistantMessageGroup).type === 'assistant_group'
+  );
+}
+
+/**
+ * Type guard to check if an entry is a legacy Message (not a group).
+ */
+export function isLegacyMessage(entry: ConversationEntry): entry is Message {
+  return !isAssistantMessageGroup(entry);
+}
+
+/**
+ * Version info for display in the UI.
+ */
+export interface VersionInfo {
+  current: number; // 1-indexed for display
+  total: number;
+  hasMultiple: boolean;
+}
 
 export interface ChatBody {
   model: OpenAIModel;
@@ -97,7 +174,7 @@ export interface ChatBody {
 export interface Conversation {
   id: string;
   name: string;
-  messages: Message[];
+  messages: ConversationEntry[];
   model: OpenAIModel;
   prompt: string;
   temperature: number;
@@ -110,8 +187,6 @@ export interface Conversation {
   verbosity?: 'low' | 'medium' | 'high'; // For GPT-5 models
   defaultSearchMode?: import('./searchMode').SearchMode; // Default search mode for this conversation
 }
-
-export type ChatInputSubmitTypes = 'TEXT' | 'IMAGE' | 'FILE' | 'MULTI_FILE';
 
 export type FileFieldValue =
   | FileMessageContent
@@ -126,7 +201,24 @@ export type ImageFieldValue =
   | ImageMessageContent[]
   | null;
 
-type UploadStatus = 'pending' | 'uploading' | 'completed' | 'failed';
+/**
+ * Status of a file during upload/processing workflow
+ */
+export type UploadStatus =
+  | 'pending'
+  | 'uploading'
+  | 'extracting' // Video: extracting audio before upload
+  | 'completed'
+  | 'failed';
+
+/**
+ * Status of async transcription jobs (batch API)
+ */
+export type TranscriptionJobStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'failed';
 
 export interface FilePreview {
   name: string;
@@ -134,6 +226,18 @@ export interface FilePreview {
   status: UploadStatus;
   previewUrl: string;
   file?: File; // Optional: Store the original File object for local operations (e.g., opening in code editor)
+  // Transcription tracking for batch jobs
+  transcriptionJobId?: string;
+  transcriptionStatus?: TranscriptionJobStatus;
+  // Transcription options (for audio/video files)
+  transcriptionLanguage?: string; // ISO-639-1 code (e.g., 'en', 'es', 'fr'). Undefined = auto-detect
+  transcriptionPrompt?: string; // Optional context/instructions for Whisper
+  // Original video info (when audio was extracted)
+  extractedFromVideo?: {
+    originalName: string;
+    originalSize: number;
+    extractedSize: number;
+  };
 }
 
 // Tool Router Types

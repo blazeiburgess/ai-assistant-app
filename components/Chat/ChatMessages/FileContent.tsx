@@ -8,7 +8,7 @@ import { fetchImageBase64FromMessageContent } from '@/lib/services/imageService'
 import {
   autoConvertToHtml,
   detectFormat,
-} from '@/lib/utils/document/formatConverter';
+} from '@/lib/utils/shared/document/formatConverter';
 
 import { FileMessageContent, ImageMessageContent } from '@/types/chat';
 
@@ -300,7 +300,7 @@ export const FileContent: FC<FileContentProps> = ({ files, images }) => {
       // Handle PDF files specially (they need ArrayBuffer)
       if (extension === 'pdf') {
         const { pdfToHtml } = await import(
-          '@/lib/utils/document/formatConverter'
+          '@/lib/utils/shared/document/formatConverter'
         );
         const arrayBuffer = await blob.arrayBuffer();
         content = await pdfToHtml(arrayBuffer);
@@ -323,9 +323,8 @@ export const FileContent: FC<FileContentProps> = ({ files, images }) => {
         sourceFormat = extension ? formatMap[extension] || null : null;
       }
 
-      // Open in document editor with source content
-      // User can switch to document mode to see rendered version
-      openDocument(content, sourceFormat, filename);
+      // Open in document editor with source content in document mode
+      openDocument(content, sourceFormat, filename, 'document');
     } catch (error) {
       console.error('Error opening file in document editor:', error);
       alert('Failed to open file in document editor. Please try again.');

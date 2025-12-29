@@ -14,7 +14,7 @@ import OpenAI, { AzureOpenAI } from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock dependencies
-vi.mock('@/lib/utils/server/chat', () => ({
+vi.mock('@/lib/utils/server/chat/chat', () => ({
   getMessagesToSend: vi.fn(),
 }));
 
@@ -100,10 +100,14 @@ describe('StandardChatService', () => {
       getClient: vi.fn(),
     } as any;
 
-    // Create service instance
+    // Mock HandlerFactory.isAnthropicModel to return false for all tests (non-Anthropic models)
+    vi.mocked(HandlerFactory.isAnthropicModel).mockReturnValue(false);
+
+    // Create service instance (with undefined for anthropicFoundryClient)
     service = new StandardChatService(
       mockAzureClient,
       mockOpenAIClient,
+      undefined, // anthropicFoundryClient - not used in tests
       mockModelSelector,
       mockToneService,
       mockStreamingService,
@@ -112,7 +116,7 @@ describe('StandardChatService', () => {
 
   describe('handleChat', () => {
     it('should handle standard chat request successfully (non-streaming)', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         { role: 'user', content: 'Hello', messageType: undefined },
       ];
@@ -134,7 +138,9 @@ describe('StandardChatService', () => {
       });
 
       // Mock getMessagesToSend
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       // Mock handler factory
@@ -217,7 +223,7 @@ describe('StandardChatService', () => {
     });
 
     it('should handle streaming chat request successfully', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         { role: 'user', content: 'Hello', messageType: undefined },
       ];
@@ -239,7 +245,9 @@ describe('StandardChatService', () => {
       });
 
       // Mock getMessagesToSend
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       // Mock handler factory
@@ -304,11 +312,12 @@ describe('StandardChatService', () => {
         undefined, // stopConversationRef
         undefined, // transcript (not provided in this test)
         undefined, // citations (not provided in this test)
+        undefined, // pendingTranscriptions (not provided in this test)
       );
     });
 
     it('should apply tone when tone is specified', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         {
           role: 'user',
@@ -343,7 +352,9 @@ describe('StandardChatService', () => {
       });
 
       // Mock getMessagesToSend
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       // Mock handler
@@ -409,7 +420,9 @@ describe('StandardChatService', () => {
       });
 
       // Mock getMessagesToSend
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       // Mock handler
@@ -454,7 +467,7 @@ describe('StandardChatService', () => {
     });
 
     it('should handle errors and log them appropriately', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         { role: 'user', content: 'Hello', messageType: undefined },
       ];
@@ -477,7 +490,9 @@ describe('StandardChatService', () => {
       });
 
       // Mock getMessagesToSend
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       // Mock handler to throw error
@@ -507,7 +522,7 @@ describe('StandardChatService', () => {
     });
 
     it('should use default stream value of true when not specified', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         { role: 'user', content: 'Hello', messageType: undefined },
       ];
@@ -529,7 +544,9 @@ describe('StandardChatService', () => {
       });
 
       // Mock getMessagesToSend
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       // Mock handler
@@ -576,7 +593,7 @@ describe('StandardChatService', () => {
     });
 
     it('should pass botId to logger when provided', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         { role: 'user', content: 'Hello', messageType: undefined },
       ];
@@ -594,7 +611,9 @@ describe('StandardChatService', () => {
         temperature: 0.7,
       });
 
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       vi.mocked(HandlerFactory.getHandler).mockReturnValue(mockHandler);
@@ -624,7 +643,7 @@ describe('StandardChatService', () => {
 
   describe('integration scenarios', () => {
     it('should handle Azure OpenAI model (gpt-5) complete workflow', async () => {
-      const model = OpenAIModels[OpenAIModelID.GPT_5];
+      const model = OpenAIModels[OpenAIModelID.GPT_5_2];
       const messages: Message[] = [
         {
           role: 'user',
@@ -645,7 +664,9 @@ describe('StandardChatService', () => {
         temperature: 0.7,
       });
 
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       vi.mocked(HandlerFactory.getHandler).mockReturnValue(mockHandler);
@@ -706,7 +727,9 @@ describe('StandardChatService', () => {
         temperature: 0.7,
       });
 
-      const { getMessagesToSend } = await import('@/lib/utils/server/chat');
+      const { getMessagesToSend } = await import(
+        '@/lib/utils/server/chat/chat'
+      );
       vi.mocked(getMessagesToSend).mockResolvedValue(messages);
 
       vi.mocked(HandlerFactory.getHandler).mockReturnValue(mockHandler);

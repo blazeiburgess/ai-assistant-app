@@ -1,14 +1,31 @@
 import { MetricsService } from '@/lib/services/observability/MetricsService';
 
-import { sanitizeForLog } from '@/lib/utils/server/logSanitization';
+import { sanitizeForLog } from '@/lib/utils/server/log/logSanitization';
 
-import { Message } from '@/types/chat';
+import {
+  FileMessageContent,
+  ImageMessageContent,
+  Message,
+  TextMessageContent,
+} from '@/types/chat';
 
 import { StandardChatService } from '../StandardChatService';
 import { ChatContext } from '../pipeline/ChatContext';
 import { BasePipelineStage } from '../pipeline/PipelineStage';
 
 import { SpanStatusCode, trace } from '@opentelemetry/api';
+
+/** Union of all possible message content types */
+type MessageContent =
+  | TextMessageContent
+  | ImageMessageContent
+  | FileMessageContent;
+
+/**
+ * Content types that should be passed through to the LLM API.
+ * Excludes 'file_url' which is an internal type for file references.
+ */
+const ALLOWED_CONTENT_TYPES = ['text', 'image_url'];
 
 /**
  * StandardChatHandler executes the final chat request.
@@ -98,17 +115,49 @@ export class StandardChatHandler extends BasePipelineStage {
 
               // Create a minimal response that just returns the transcript
               const encoder = new TextEncoder();
+              const pendingTranscriptions =
+                context.processedContent?.pendingTranscriptions;
+
+              // Get jobId from pending transcriptions for tracking
+              const pendingJobId =
+                pendingTranscriptions && pendingTranscriptions.length > 0
+                  ? pendingTranscriptions[0].jobId
+                  : undefined;
+
               const stream = new ReadableStream({
                 start(controller) {
                   // Send metadata with transcript only (no LLM processing)
-                  const metadata = {
+                  // Include pendingTranscriptions for async batch jobs
+                  // Include jobId in transcript metadata for reliable message tracking
+                  const metadata: {
+                    transcript: {
+                      filename: string;
+                      transcript: string;
+                      processedContent: undefined;
+                      jobId?: string;
+                    };
+                    pendingTranscriptions?: typeof pendingTranscriptions;
+                  } = {
                     transcript: {
                       filename: transcript.filename,
                       transcript: transcript.transcript,
                       processedContent: undefined, // No LLM processing
+                      jobId: pendingJobId, // For reliable message update tracking
                     },
                   };
+                  if (
+                    pendingTranscriptions &&
+                    pendingTranscriptions.length > 0
+                  ) {
+                    metadata.pendingTranscriptions = pendingTranscriptions;
+                  }
 
+                  // Send placeholder content FIRST so it becomes the message content
+                  // This allows updateMessageWithTranscript to find and replace it later
+                  const placeholderContent = transcript.transcript;
+                  controller.enqueue(encoder.encode(placeholderContent));
+
+                  // Then send metadata
                   const metadataStr = `\n\n<<<METADATA_START>>>${JSON.stringify(metadata)}<<<METADATA_END>>>`;
                   controller.enqueue(encoder.encode(metadataStr));
                   controller.close();
@@ -179,6 +228,8 @@ export class StandardChatHandler extends BasePipelineStage {
             transcript,
             citations,
             tone: context.tone,
+            pendingTranscriptions:
+              context.processedContent?.pendingTranscriptions,
           });
 
           console.log('[StandardChatHandler] Chat execution completed');
@@ -247,9 +298,9 @@ export class StandardChatHandler extends BasePipelineStage {
    * 3. Use original messages (if no processing)
    */
   private buildFinalMessages(context: ChatContext): Message[] {
-    // If enrichers modified messages, use those
+    // If enrichers modified messages, use those (but still sanitize)
     if (context.enrichedMessages) {
-      return context.enrichedMessages;
+      return this.stripUnsupportedContentTypes(context.enrichedMessages);
     }
 
     // If we have processed content, inject it into messages
@@ -320,10 +371,66 @@ export class StandardChatHandler extends BasePipelineStage {
         };
       }
 
-      return messages;
+      // Sanitize all messages before returning (defensive measure)
+      return this.stripUnsupportedContentTypes(messages);
     }
 
-    // No processing, return original messages
-    return context.messages;
+    // No processing, return original messages with file_url filtered out
+    return this.stripUnsupportedContentTypes(context.messages);
+  }
+
+  /**
+   * Strips content types not supported by LLM APIs from messages.
+   * This is a defensive measure to ensure 'file_url' and other internal
+   * content types never reach the API even if upstream processing fails.
+   *
+   * @param messages - The messages to sanitize
+   * @returns Messages with only API-supported content types
+   */
+  private stripUnsupportedContentTypes(messages: Message[]): Message[] {
+    return messages.map((message) => {
+      // String content is always valid
+      if (typeof message.content === 'string') {
+        return message;
+      }
+
+      // Non-array content, pass through
+      if (!Array.isArray(message.content)) {
+        return message;
+      }
+
+      // Filter out unsupported content types
+      const filteredContent = message.content.filter((c: MessageContent) =>
+        ALLOWED_CONTENT_TYPES.includes(c.type),
+      );
+
+      // If all content was filtered out, add placeholder text
+      if (filteredContent.length === 0) {
+        console.warn(
+          '[StandardChatHandler] All content was filtered out, adding placeholder',
+        );
+        return {
+          ...message,
+          content: '[File content could not be processed]',
+        };
+      }
+
+      // If only one text item remains, convert to string for simplicity
+      if (
+        filteredContent.length === 1 &&
+        filteredContent[0].type === 'text' &&
+        'text' in filteredContent[0]
+      ) {
+        return {
+          ...message,
+          content: (filteredContent[0] as TextMessageContent).text,
+        };
+      }
+
+      return {
+        ...message,
+        content: filteredContent,
+      };
+    });
   }
 }
